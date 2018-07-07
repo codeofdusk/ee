@@ -1,0 +1,169 @@
+\documentclass[14pt,a4paper]{report}
+\input{preamble.tex}
+\title{Analysis of Wikipedia talk pages created before their corresponding articles}
+\author{Bill Dengler}
+\date{\parbox{\linewidth}{\centering%
+  30th November 2017\endgraf\bigskip
+  Subject: computer science\newline
+  Research question: Why do some Wikipedia articles have their first visible edits to their talk pages occurring before those of the articles themselves?\newline
+word count: 3525\newline
+I declare that this work is my own work and is the final version.\newline I have acknowledged each of the words or ideas of another person, whether written, oral or visual.}}
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+\chapter{Introduction}
+Wikipedia is a free online encyclopedia that anyone can edit. Founded in 2001 by Larry Sanger and Jimmy (Jimbo) Wales, the site now consists of over forty million articles in more than 250 languages, making it the largest and most popular online general reference work. As of 2015, the site was Ranked by Alexa as the 5th most visited website overall. \autocite{wikipedia}
+
+Wikipedia allows anyone to edit, without requiring user registration. \autocite{register} The site permanently stores histories of edits made to its pages. Each page's history consists of a chronological list of changes (with timestamps in Coordinated Universal Time [UTC]) of each, differences between revisions, the username or IP address of the user making each edit, and an ``edit summary'' written by each editor explaining their changes to the page. Anyone can view a page's history on its corresponding history page, by clicking the ``history'' tab at the top of the page. \autocite{histhelp}
+
+Sometimes, Wikipedia page histories are incomplete. Instead of using the move function to rename a page (which transfers history to the new title), inexperienced editors occasionally move the text of the page by cut-and-paste. \autocite{histhelp,move} Additionally, users who are not logged in, or users who do not have the autoconfirmed right (which requires an account that is at least four days old and has made ten edits or more)\footnote{In some special cases, the privileges of the autoconfirmed right are granted manually by a Wikipedia administrator\autocite{confirm}} are unable to use the page move function, and sometimes attempt to move pages by cut-and-paste. \autocite{move} When pages are moved in this way, history is split, with some at the old title (before the cut-and-paste) and some at the new title (after the cut-and-paste). To fix this split history, a Wikipedia administrator must merge the histories of the two pages by moving revisions from the old title to the new one. \autocite{historymerge}
+
+For legal reasons, text on Wikipedia pages that violates copyright and is not subject to fair use must be deleted. In the past, entire pages with edits violating copyright would be deleted to suppress copyrighted text from the page history. However, deleting the entire page had the consequence of deleting the page's entire history, not just the copyrighted text. In many of these cases, this led to page history fragmentation. To mitigate this, Wikipedia administrators now tend to delete only revisions violating copyright using the revision deletion feature, unless there are no revisions in the page's history that do not violate copyright.
+
+Originally, Wikipedia did not store full page histories. The site used a wiki engine called UseMod Wiki. \autocite{usemod} UseMod Wiki has a feature called KeptPages, which periodically deletes old page history to save disk space and ``forgive and forget'' mistakes made by new or inexperienced users. Due to this feature, some old page history was deleted by the UseMod Wiki software, so it has been lost.
+
+In February 2002, an incident known on Wikipedia as the ``Great Oops''\autocite{oopsydoopsy} caused the timestamps of many old edits to be reset to 25 February 2002, 15:43 or 15:51 UTC. Wikipedia had recently transitioned to the phase 2 software; the precursor to MediaWiki (their current engine) and the replacement for UseMod Wiki. \autocite{phase2} The Phase II Software's new database schema had an extra column not present in the UseMod Wiki database. This extra column was filled in with a default value, which inadvertently caused the timestamp reset. \autocite{oopsexplained}
+
+Each Wikipedia page also has a corresponding talk page. Talk pages allow Wikipedia editors to discuss page improvements, such as controversial edits, splits of large pages into several smaller pages, merges of related smaller pages into a larger page, page moves (renames), and page deletions. \autocite{talkhelp} Since talk pages are just Wikipedia pages with a special purpose, they have page history like any other Wikipedia page, and all the aforementioned page history inconsistencies.
+
+An indicator of page history inconsistency is the creation time of a Wikipedia page relative to its talk page. Logically, a Wikipedia page should be created before its talk page, not after; Wikipedians can't discuss pages before their creation! The aim of this extended essay is to find out why some Wikipedia articles have edits to their talk pages appearing before the articles themselves.
+
+\chapter{Data collection}
+To determine which articles have edits to their talk pages occurring before the articles themselves, I wrote and ran a database query on Wikimedia Tool Labs\footnote{During the course of my writing of this extended essay, Wikimedia Tool Labs was renamed to Wikimedia Cloud Services. \autocite{wmfrenamed} The essay will use the old name, because that was current at the time of the conclusion of my research.}, an openstack-powered cloud providing hosting for Wikimedia-related projects as well as access to replica databases; copies of Wikimedia wiki databases, sans personally-identifying information, for analytics and research purposes. \autocite{wmflabs} The Wikipedia database contains a page table, with a \lstinline[language=sql]{page_title} column representing the title of the page. Since there are often multiple (related) Wikipedia pages with the same name, Wikipedia uses namespaces to prevent naming conflicts and to separate content intended for readers from content intended for editors. \autocite{namespace} In the page title and URL, namespaces are denoted by a prefix to the page's title; articles have no prefix, and article talk pages have a prefix of talk:. However, in the database, the prefix system is not used; the \lstinline[language=sql]{page_title} column contains the page's title without the prefix, and the \lstinline[language=sql]{page_namespace} column contains a numerical representation of a page's namespace. Wikipedia articles have a \lstinline[language=sql]{page_namespace} of 0, and article talk pages have a \lstinline[language=sql]{page_namespace} of 1. The \lstinline[language=sql]{page_id} field is a primary key uniquely identifying a Wikipedia page in the database.
+
+The revision table of the Wikipedia database contains a record of all revisions to all pages. The \lstinline[language=sql]{rev_timestamp} column contains the timestamp, in SQL timestamp form \autocite{sqltime}, of a revision in the database. The \lstinline[language=sql]{rev_page} column contains the \lstinline[language=sql]{page_id} of a revision. The \lstinline[language=sql]{rev_id} column contains a unique identifier for each revision of a page. The \lstinline[language=sql]{rev_parent_id} column contains the \lstinline[language=sql]{rev_id} of the previous revision, or 0 for new pages.
+
+The database query retrieved a list of all Wikipedia pages in namespace 0 (articles) and namespace 1 (talk pages of articles). For each page, the title, timestamp of the first revision (the first revision to have a \lstinline[language=sql]{rev_parent_id} of 0), and namespace were collected. My SQL query is below:
+\begin{lstlisting}[language=sql]
+select page_title, rev_timestamp, page_namespace
+from page, revision
+where rev_parent_id=0
+and rev_page = page_id
+and (page_namespace=0 or page_namespace=1);
+\end{lstlisting}
+
+Due to the size of the Wikipedia database, I could not run the entire query at once; the connection to the database server timed out or the server threw a ``query execution was interrupted'' error. To avoid the error, I segmented the query, partitioning on the \lstinline[language=sql]{page_id} field. During the query, I adjusted the size of each collected ``chunk'' to maximize the number of records collected at once; the sizes ranged from one million to ten million. To partition the query, I added a \lstinline[language=sql]{where} clause as follows:
+\begin{lstlisting}[language=sql]
+select page_title, rev_timestamp, page_namespace
+from page, revision
+where page_id>1000000
+and page_id<=2000000
+and rev_parent_id=0
+and rev_page = page_id
+and (page_namespace=0 or page_namespace=1);
+\end{lstlisting}
+I wrapped each database query in a shell script which I submitted to the Wikimedia Labs Grid; a cluster of servers that perform tasks on Wikimedia projects. \autocite{grid} An example wrapper script follows:
+\begin{lstlisting}[language=sh]
+#!/bin/bash
+sql enwiki -e "query"
+\end{lstlisting}
+\lstinline[language=sh]{sql enwiki} is an alias on Wikimedia Labs for accessing the database of the English Wikipedia, and \lstinline[language=sh]{query} is the SQL query. The Wikimedia Labs Grid writes standard output to \lstinline[language=sh]{scriptname.out} and standard error to \lstinline[language=sh]{scriptname.err}, where \lstinline[language=sh]{scriptname} is the name of the script. My set of wrapper scripts were named \lstinline[language=sh]{eecollect1.sh} through \lstinline[language=sh]{eecollect12.sh}, one script containing each line of the SQL query (see appendix \ref{appendix:db} for the wrapper scripts submitted to the Wikimedia Tool Labs). Running \lstinline[language=sh]{cat eecollect*.out > eecollect.out} concatenated the various "chunks" of output into one file for post-processing.
+
+\chapter{Post-processing}
+The database query retrieved a list of all articles and talk pages in the Wikipedia database, along with the timestamps of their first revisions. This list contained tens of millions of items; it was necessary to filter it to generate a list of articles where the talk page appeared to be created before the article. To do this, I wrote a Python program, \textit{eeprocess.py} (see appendix \ref{appendix:eeprocess} for source code) that read the list, compared the timestamps of the articles to those of their talk pages and generated a csv file of articles whose talk pages have visible edits before those of the articles themselves. The csv file contained the names of all articles found, along with the timestamp of the first revision to the article itself and the article's talk page. After downloading the concatenated output file from Wikimedia Labs, I ran my post-processor against it.
+
+The first run of the post-processor found a list of 49,256 articles where the talk page was created before the article itself. Further investigation showed that many of these articles had talk pages created with in seconds of the article, which are not useful for my purposes; they are not indicative of missing history.
+
+In hopes of reducing the list, I added a command-line option to the post-processor, \lstinline[language=sh]{--window}, that requires an article's talk page to be a specified number of seconds older than the article for inclusion in the list. In other words, an article's talk page must be at least \lstinline[language=sh]{--window} seconds older than the article itself to be included in the list. I then ran the post-processor with several values of \lstinline[language=sh]{--window}, saved a copy of the output of each run, and counted the number of articles found in each .csv file. To count the number of rows in an output file, I fed the file to standard input of the \lstinline[language=sh]{wc} utility by piping the output of the \lstinline[language=sh]{cat} command to \lstinline[language=sh]{wc}. I used the \lstinline[language=sh]{wc -l} switch to count the number of lines in the file. I then subtracted 1 from each result to avoid counting the header row. Table \ref{tab:eeprocess} contains the number of articles in the output of the post-processor given various values of \lstinline[language=sh]{--window}.\footnote{The full contents of the .csv file could not be included due to length (the table spans hundreds of pages).}
+\begin{table}[h!]
+  \centering
+  \caption{Number of articles in the output of \textit{eeprocess.py} given various values of \lstinline[language=sh]{--window}. One day is equal to 86,400 seconds.}
+  \label{tab:eeprocess}
+  \begin{tabular}{cc}
+    \toprule
+    Time Period&Number of Articles\\
+    \midrule
+one day&26,040\\
+    one month (30 days)&20,877\\
+    six months (180 days)&15,755\\
+one year (365 days)&12,616\\
+two years (730 days)&8,983\\
+five years (1,825 days)&3429\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textit{eeprocess.py} reads the SQL query output in a linear fashion. Since the program must read one row at a time from the file, it runs in $\mathcal{O}(n)$ time. In other words, the speed of the program is directly proportional to the number of rows in the input (\lstinline[language=sh]{eecollect.out}) file. While this linear algorithm is extremely inefficient for large SQL queries, it is necessary for accurate results; the program must read each page name and timestamp into a corresponding dictionary for the page's namespace.
+
+To check if an article's talk page is older than the article itself, \textit{eeprocess.py} used the \lstinline[language=python]{dateutil.parser} module in the Python standard library to convert the SQL timestamp of the first revision of each article into a Python \lstinline[language=python]{datetime.Datetime} object; a datatype in the standard library for representing dates and times. These \lstinline[language=python]{datetime.Datetime} objects are then converted to unix time using the \lstinline[language=python]{datetime.Datetime.timestamp} method. The difference of these timestamps is taken and checked against \lstinline[language=sh]{--window}; if the difference is greater than or equal to \lstinline[language=sh]{--window}, it is included in the list. Instead of comparing unix timestamps, I could have treated the timestamps as integers, taken their difference and checked if it was greater than or equal to a predetermined value; this would have been more efficient, but an accurate \lstinline[language=sh]{--window} option would have been near impossible to implement.
+
+\chapter{Automatic analysis}
+After filtering the list to find articles whose talk pages were created at least one day before the articles themselves (with the \lstinline[language=sh]{--window} option to \textit{eeprocess.py}), I wrote another Python program (see appendix \ref{appendix:eeanalyze} for source code) to compare the list against a database dump of the Wikipedia deletion and move logs, taken on 20 April 2017. The program writes an analysis of this comparison to a .csv file.\footnote{The data in this .csv file could not be included due to length.}
+
+My program, \textit{eeanalyze.py}, scanned for two possible reasons why the article's talk page would appear to have edits before the article itself. If an article was deleted due to copyright violation, the article will be deleted with ``copyright'' or ``copyvio'' (an on-wiki abbreviation of ``copyright violation'') in the text of the deletion log comment field.
+
+Normally, article deletions must be discussed by the community before they take place. However, in some cases, articles may be speedily deleted (deleted without discussion) by a Wikipedia administrator. Criterion G12 (unambiguous copyright infringement) and historical criterion A8 (blatant copyright infringement) apply to copyright violations. \autocite{csd} If an article is speedily deleted under one of these criteria, a speedy deletion code for copyright violation (``A8'' or ``G12'') will appear in the comment field of the deletion log. If a matching string is found in an article's deletion log comments, \textit{eeanalyze.py} flags the article as being deleted for copyright violation.
+
+Another possible cause is an incorrect article move; in some cases, an article is moved by cut-and-paste, but its talk page is moved correctly. When this happens, the article's history is split, but the talk page's history is complete. To fix this, the article's history needs to be merged by a Wikipedia administrator. \textit{eeanalyze.py} searches the page move logs for instances where a talk page is moved (the destination of a page move is the current article title), but no move log entry is present for the article itself.
+
+\textit{eeanalyze.py} also generates \textit{eemoves.csv}, a file containing a list of ``move candidates''; page moves where the destination appears in the list of articles generated by \textit{eeprocess.py}. While I ultimately did not use this list during my analysis, it may yield additional insight into the page history inconsistencies.
+
+\textit{eeanalyze.py} uses the mwxml Python library to efficiently process XML database dumps from MediaWiki wikis, like Wikipedia. For a MediaWiki XML database dump, the library provides \lstinline[language=python]{log_items}; a generator of \lstinline[language=python]{logitem} objects containing log metadata from the dump. Initially, the library only supported dumps containing article revisions, not logs. I contacted the developer requesting the latter functionality. Basic support for log dumps was added in version 0.3.0 of the library \autocite{mwxml}; I tested this new support through my program and reported library bugs to the developer.
+
+\textit{eeanalyze.py} reads the database dump in a linear fashion. Since linear search runs in $\mathcal{O}(n)$ time, its speed is directly proportional to the number of items to be searched. While linear search is extremely inefficient for a dataset of this size, it is necessary for accurate results; there is no other accurate way to check the destination (not source) of a page move.
+
+In theory, I could have iterated over just the articles found by \textit{eeprocess.py}, binary searching the dump for each one and checking it against the conditions. While the number of articles to search ($n$) would have been reduced, the streaming XML interface provided by \lstinline[language=python]{mwxml} does not support Python's binary search algorithms. Additionally, if it was possible to implement this change, it would have slowed the algorithm to $\mathcal{O}(n\log{n})$ because I would need to sort the log items by name first.
+
+\chapter{Classification of results}
+Once the automatic analysis was generated, I wrote a Python program, \textit{eeclassify.py} (see appendix \ref{appendix:eeclassify} for source code). This program compared the output of \textit{eeprocess.py} and \textit{eeanalyze.py} and performed final analysis. The program also created a .csv file, \textit{eefinal.csv}, which contained a list of such articles, the timestamp of their first main and talk edits, the result (if any) of automatic analysis, and (when applicable) log comments. \footnote{The data in this .csv file could not be included due to length.}
+
+A bug in an early version of \textit{eeprocess.py} led to incorrect handling of articles with multiple revisions where \lstinline[language=sql]{rev_parent_id = 0}. The bug caused several timestamps of the first visible edits to some pages to be miscalculated, leading to false positives. The bug also caused the output to incorrectly include pages that had some edits deleted by an administrator using the revision deletion feature. When I discovered the bug, I patched \textit{eeprocess.py} and reran \textit{eeprocess.py} and \textit{eeanalyze.py} to correct the data. While I am fairly confident that \textit{eeprocess.py} no longer incorrectly flags pages with revision deletions, \textit{eeclassify.py} attempts to filter out any pages that have been mistakenly included as an additional precaution.
+
+In some cases, Wikipedia articles violating copyright are overwritten with new material as opposed to being simply deleted. In these cases, the revisions violating copyright are deleted from the page history, and a new page is moved over the violating material. \textit{eeclassify.py} searches for cases in which a page move was detected by \textit{eeanalyze.py}, but the comment field of the log indicates that the page was a copyright violation (``copyright'', ``copyvio'', ``g12'', or ``a8'' appears in the log comments). In these cases, \textit{eeclassify.py} updates the automatic analysis of the page to show both the page move and the copyright violation.
+
+\textit{eeclassify.py} found a list of articles whose talk pages appeared to be created before the articles themselves due to the Great Oops and UseMod KeptPages. It did this by checking if the timestamps of the first visible main and talk edits to a page were before 15:52 UTC on 25 February 2002.
+
+Before the English Wikipedia upgraded to MediaWiki 1.5 in June 2005, all article titles and contents were encoded in ISO 8859-1 (nominally Windows-1252). This meant that many special characters, such as some accented letters, could not be used. \autocite{utf8} After the upgrade, many pages were moved to new titles with the correct diacritics. However, not all pages were correctly moved, leading to history fragmentation in several cases. \textit{eeclassify.py} scans for this case and flags affected articles.
+
+The program generated statistics showing the reasons why the talk pages of certain articles appear to be created before the articles themselves, which it wrote to standard output. Table \ref{tab:eeclassify} shows the statistics generated by \textit{eeclassify.py}: the number of automatically analyzed articles with their corresponding reasons.
+\begin{table}[h!]
+  \centering
+  \caption{Numbers of articles classified by \textit{eeclassify.py}, organized by reason}
+  \label{tab:eeclassify}
+  \begin{tabular}{cc}
+    \toprule
+    Reason&Number of Articles\\
+    \midrule
+Copyright violation&1,325\\
+Copyright violation, but a new page was moved over the violating material&72\\
+Likely moved by cut-and-paste, while talk page moved properly&20\\
+Split history, with differences in capitalization or diacritics in the title&101\\
+Affected by the Great Oops or UseMod KeptPages&360\\
+Unknown reason (automatic analysis condition not met) &24,061\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\chapter{Analysis of results}
+Out of the 25,941 articles with the first visible edits to their talk pages appearing at least one day before those of the articles themselves, only 1,880 articles could be automatically analyzed. The reason that so few articles could be automatically analyzed is that there is a large number of unusual cases of page history inconsistency.
+
+For example, in the case of ``Paul tseng'', the creator of the article began writing it on their user page, a Wikipedia page that each user can create to describe themselves or their Wikipedia-related activities. Users can also create sandboxes in the user namespace, areas where they can experiment or write drafts of their articles. Users also have talk pages, which can be used for communication between users on the wiki. \autocite{userpage} Typically, these sandboxes are subpages of the user page. However, in this case, the creator of the ``Paul tseng'' article did not create a separate sandbox for the article, instead writing it directly on their main user page. When they completed the article, they moved both their user page which contained the article text, as well as their personal talk page, to ``Paul tseng''. Clearly, the user had received messages from other users on the wiki before this move, so the talk page of ``Paul tseng'' contained personal messages addressed to the creator of the ``Paul tseng'' article. Upon discovering this, I reported the situation to a Wikipedia administrator, who split the talk page history, placing the user talk messages back in their appropriate namespace. \autocite{paultseng} On the English Wikipedia, it is good practice to place a signature at the end of messages and comments, by typing four tildas (\textasciitilde{}\textasciitilde{}\textasciitilde{}\textasciitilde{}). \autocite{signatures} Signatures can contain the username of the commenter, links to their user or talk pages, and the timestamp of the comment in coordinated universal time (UTC). The talk page was created by SineBot, a bot that adds such signatures in case a user fails to do so. If a user fails to sign three messages in a 24-hour period, SignBot leaves a message on their talk page informing them about signatures, creating the user talk page if it does not already exist. \autocite{sinebot} To make sure that no other similar cases have occurred, I checked if SineBot has created any other pages in the talk namespace. It has not, so this seems to be a unique occurrence.
+
+Firefox has a built-in Wikipedia search feature. In old versions, entering ``wp'' (the Wikipedia search keyword) without a search term would redirect users to \url{https://en.wikipedia.org/wiki/\%25s}. As a temporary workaround, a redirect was created to send these users to the Wikipedia main page. The associated talk page was used to discuss both the redirect and \%s as a format string used in various programming languages. \autocite{percents} The redirect has since been replaced with a disambiguation page; a navigation aid to help users locate pages with similar names. \autocite{dabdabdab} The talk page has been preserved for historical reasons. Clearly, it contains edits older than those to the disambiguation page.
+
+In the case of the ``Arithmetic'' article, the talk page was intentionally created before the article itself, so it does not indicate missing history. A user moved some discussion about the article from the ``Multiplication'' talk page to a new page, which would later serve as the talk page for the ``Arithmetic'' article. \autocite{arithmetic,arithmetictalk} While it is definitely an unusual case, it all seems to add up in the end!
+
+\printbibliography[heading=bibintoc,title={References}]
+\appendix
+\appendixpage
+\chapter{SQL Wrapper Scripts Submitted to Wikimedia Tool Labs}\label{appendix:db}
+\lstinputlisting[language=sh,title=eecollect1.sh]{eecollect1.sh}
+\lstinputlisting[language=sh,title=eecollect2.sh]{eecollect2.sh}
+\lstinputlisting[language=sh,title=eecollect3.sh]{eecollect3.sh}
+\lstinputlisting[language=sh,title=eecollect4.sh]{eecollect4.sh}
+\lstinputlisting[language=sh,title=eecollect5.sh]{eecollect5.sh}
+\lstinputlisting[language=sh,title=eecollect6.sh]{eecollect6.sh}
+\lstinputlisting[language=sh,title=eecollect7.sh]{eecollect7.sh}
+\lstinputlisting[language=sh,title=eecollect8.sh]{eecollect8.sh}
+\lstinputlisting[language=sh,title=eecollect9.sh]{eecollect9.sh}
+\lstinputlisting[language=sh,title=eecollect10.sh]{eecollect10.sh}
+\lstinputlisting[language=sh,title=eecollect11.sh]{eecollect11.sh}
+\lstinputlisting[language=sh,title=eecollect12.sh]{eecollect12.sh}
+\chapter{Post-Processor Source Code}\label{appendix:eeprocess}
+\lstinputlisting[language=python,title=eeprocess.py]{eeprocess.py}
+\chapter{Analyzer Source Code}\label{appendix:eeanalyze}
+\lstinputlisting[language=python,title=eeanalyze.py]{eeanalyze.py}
+\chapter{Classifier Source Code}\label{appendix:eeclassify}
+\lstinputlisting[language=python,title=eeclassify.py]{eeclassify.py}
+\end{document}
